@@ -9,8 +9,8 @@ class Contribute extends Model
 {
     use HasFactory;
 
-    // Allow mass assignment
     protected $fillable = [
+        'user_id', // Add this
         'title',
         'organization',
         'request_type',
@@ -26,11 +26,15 @@ class Contribute extends Model
 
     public function categories()
     {
-        return $this->belongsToMany(Category::class);
+        // Explicitly specify table name if needed
+        return $this->belongsToMany(Category::class, 'category_contribute');
     }
 
     public function tags()
     {
-        return $this->belongsToMany(Tag::class);
+        // Explicitly specify table name if needed
+        return $this->belongsToMany(Tag::class, 'contribute_tag');
+        // OR if your table is named 'tag_contribute':
+        // return $this->belongsToMany(Tag::class, 'tag_contribute');
     }
 }

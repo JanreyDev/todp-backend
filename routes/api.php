@@ -2,28 +2,35 @@
 
 use App\Http\Controllers\Api\AuthController;
 use App\Http\Controllers\Api\ContributeController;
+use App\Http\Controllers\Api\CategoryController;
+use App\Http\Controllers\Api\TagController;
 use Illuminate\Support\Facades\Route;
 
-// Public routes (no authentication required)
+// Public routes
 Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
-
-// Public leaderboard (no auth required)
 Route::get('/contributes/leaderboard', [ContributeController::class, 'publicLeaderboard']);
-
-// Public approved contributions (no auth required)
 Route::get('/contributes/approved', [ContributeController::class, 'approved']);
 
-// Protected routes (authentication required)
+// Public: Fetch categories and tags
+Route::get('/categories', [CategoryController::class, 'index']);
+Route::get('/tags', [TagController::class, 'index']);
+
+// Protected routes
 Route::middleware('auth:api')->group(function(){
-    // Auth routes
     Route::post('/logout', [AuthController::class, 'logout']);
     Route::get('/me', [AuthController::class, 'me']);
-
-    // Contribution routes
-    Route::post('/contributes', [ContributeController::class, 'store']); // Any authenticated user can submit
-    Route::get('/contributes/my', [ContributeController::class, 'myContributions']); // User's own contributions
-    Route::get('/contributes', [ContributeController::class, 'index']); // Admin: view all
-    Route::get('/contributes/{id}', [ContributeController::class, 'show']); // View single contribution
-    Route::put('/contributes/{id}', [ContributeController::class, 'update']); // Admin: update status
+    
+    // Contributions
+    Route::post('/contributes', [ContributeController::class, 'store']);
+    Route::get('/contributes/my', [ContributeController::class, 'myContributions']);
+    Route::get('/contributes', [ContributeController::class, 'index']);
+    Route::get('/contributes/{id}', [ContributeController::class, 'show']);
+    Route::put('/contributes/{id}', [ContributeController::class, 'update']);
+    
+    // Categories & Tags (Admin only - add middleware if needed)
+    Route::post('/categories', [CategoryController::class, 'store']);
+    Route::post('/categories/find-or-create', [CategoryController::class, 'findOrCreate']);
+    Route::post('/tags', [TagController::class, 'store']);
+    Route::post('/tags/find-or-create', [TagController::class, 'findOrCreate']);
 });

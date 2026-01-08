@@ -6,22 +6,18 @@ use Illuminate\Support\Facades\Schema;
 
 return new class extends Migration
 {
-    /**
-     * Run the migrations.
-     */
     public function up(): void
     {
-        Schema::create('tag_contribute', function (Blueprint $table) {
+        Schema::create('contribute_tag', function (Blueprint $table) {
             $table->id();
+            $table->foreignId('contribute_id')->constrained()->onDelete('cascade'); // Add this
+            $table->foreignId('tag_id')->constrained()->onDelete('cascade'); // Add this
             $table->timestamps();
         });
     }
 
-    /**
-     * Reverse the migrations.
-     */
     public function down(): void
     {
-        Schema::dropIfExists('tag_contribute');
+        Schema::dropIfExists('contribute_tag');
     }
 };
