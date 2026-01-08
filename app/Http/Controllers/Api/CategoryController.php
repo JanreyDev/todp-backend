@@ -5,67 +5,137 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use App\Models\Category;
 use Illuminate\Http\Request;
-use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Str;
 
 class CategoryController extends Controller
 {
     /**
-     * Get all categories
+     * Get all categories with dataset counts
      */
     public function index()
     {
-        $categories = Category::orderBy('name')->get();
+        $categories = Category::withCount([
+            'contributes' => function ($query) {
+                $query->where('status', 'approved');
+            }
+        ])
+        ->orderBy('name')
+        ->get()
+        ->map(function ($category) {
+            return [
+                'id' => $category->id,
+                'name' => $category->name,
+                'slug' => Str::slug($category->name),
+                'datasets_count' => $category->contributes_count ?? 0,
+                'description' => $this->getCategoryDescription($category->name),
+                'icon' => $this->getCategoryIcon($category->name),
+            ];
+        });
+
         return response()->json($categories);
     }
 
     /**
-     * Create a new category
+     * Store a new category
      */
     public function store(Request $request)
     {
-        $validator = Validator::make($request->all(), [
+        $validated = $request->validate([
             'name' => 'required|string|max:255|unique:categories,name',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
+        $category = Category::create($validated);
 
-        $category = Category::create([
-            'name' => trim($request->name)
-        ]);
-
-        return response()->json($category, 201);
+        return response()->json([
+            'message' => 'Category created successfully',
+            'category' => $category,
+        ], 201);
     }
 
     /**
-     * Find or create category by name
-     * This is useful for bulk operations
+     * Find existing category or create new one
      */
     public function findOrCreate(Request $request)
     {
-        $validator = Validator::make($request->all(), [
-            'names' => 'required|array',
-            'names.*' => 'required|string|max:255',
+        $validated = $request->validate([
+            'name' => 'required|string|max:255',
         ]);
 
-        if ($validator->fails()) {
-            return response()->json([
-                'message' => 'Validation failed',
-                'errors' => $validator->errors()
-            ], 422);
-        }
+        $category = Category::firstOrCreate(
+            ['name' => $validated['name']]
+        );
 
-        $categories = [];
-        foreach ($request->names as $name) {
-            $categories[] = Category::firstOrCreate(
-                ['name' => trim($name)]
-            );
-        }
+        return response()->json([
+            'category' => $category,
+            'created' => $category->wasRecentlyCreated,
+        ]);
+    }
 
-        return response()->json($categories);
+    /**
+     * Get category description based on name
+     * You can move this to database later if needed
+     */
+    private function getCategoryDescription(string $name): string
+    {
+        $descriptions = [
+            'Education' => 'Schools, enrollment, and educational facilities data',
+            'Population & Demographics' => 'Census, age distribution, and socioeconomic indicators',
+            'Health & Hospitals' => 'Healthcare facilities, health workers, and health statistics',
+            'Infrastructure' => 'Roads, bridges, public buildings, and utilities',
+            'Agriculture & Fisheries' => 'Farmland, crop production, and agricultural data',
+            'Environment' => 'Forest cover, watersheds, and environmental monitoring',
+            'Business & Economy' => 'Business registration, investment, and economic indicators',
+            'Governance & Budget' => 'Budget, expenditures, bids, and procurement data',
+            'Public Safety' => 'Police, fire stations, and emergency response data',
+            'Transportation' => 'Public transport, traffic, and mobility data',
+            'Tourism' => 'Tourist attractions, accommodations, and visitor statistics',
+            'Social Services' => 'Welfare programs, community services, and assistance data',
+            'Technology & Innovation' => 'Digital infrastructure, IT projects, and innovation initiatives',
+            'Energy' => 'Power generation, distribution, and energy consumption data',
+            'Water Resources' => 'Water supply, distribution, and quality monitoring',
+            'Finance & Revenue' => 'Tax collection, revenue sources, and financial reports',
+            'Housing & Urban Development' => 'Housing projects, urban planning, and land use data',
+            'Public Records' => 'Official documents, permits, and administrative records',
+            'Climate & Weather' => 'Weather patterns, climate data, and meteorological information',
+            'Culture & Heritage' => 'Cultural sites, heritage preservation, and arts programs',
+            'Geography & Maps' => 'Geographical information, topography, and mapping data',
+            'Open Data' => 'General open data resources and datasets',
+        ];
+
+        return $descriptions[$name] ?? 'Data related to ' . strtolower($name);
+    }
+
+    /**
+     * Get icon name for category based on name
+     * Using lucide-react icon names
+     */
+    private function getCategoryIcon(string $name): string
+    {
+        $icons = [
+            'Education' => 'GraduationCap',
+            'Population & Demographics' => 'Users',
+            'Health & Hospitals' => 'Heart',
+            'Infrastructure' => 'Building2',
+            'Agriculture & Fisheries' => 'Wheat',
+            'Environment' => 'TreePine',
+            'Business & Economy' => 'TrendingUp',
+            'Governance & Budget' => 'Landmark',
+            'Public Safety' => 'Shield',
+            'Transportation' => 'AlertTriangle',
+            'Tourism' => 'HeartHandshake',
+            'Social Services' => 'HeartHandshake',
+            'Technology & Innovation' => 'Wifi',
+            'Energy' => 'Droplets',
+            'Water Resources' => 'Droplets',
+            'Finance & Revenue' => 'Banknote',
+            'Housing & Urban Development' => 'Home',
+            'Public Records' => 'Eye',
+            'Climate & Weather' => 'Cloud',
+            'Culture & Heritage' => 'BookOpen',
+            'Geography & Maps' => 'MapPin',
+            'Open Data' => 'Database',
+        ];
+
+        return $icons[$name] ?? 'Database';
     }
 }
