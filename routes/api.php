@@ -11,7 +11,7 @@ Route::post('/register', [AuthController::class, 'register']);
 Route::post('/login', [AuthController::class, 'login']);
 Route::get('/contributes/leaderboard', [ContributeController::class, 'publicLeaderboard']);
 Route::get('/contributes/approved', [ContributeController::class, 'approved']);
-Route::get('/contributes/approved/{id}', [ContributeController::class, 'showApproved']);
+Route::get('/contributes/approved/{id}', [ContributeController::class, 'showApproved']); // ADD THIS LINE
 
 // Public: Fetch categories and tags
 Route::get('/categories', [CategoryController::class, 'index']);
