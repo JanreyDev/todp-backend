@@ -17,7 +17,7 @@ class ContributeController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255',
+            'title' => 'required|string|max:255', // 🔑 ADD THIS
             'organization' => 'required|string|max:255',
             'request_type' => 'required|string|max:255',
             'message' => 'required|string',

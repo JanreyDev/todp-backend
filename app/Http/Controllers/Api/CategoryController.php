@@ -27,8 +27,8 @@ class CategoryController extends Controller
                 'name' => $category->name,
                 'slug' => Str::slug($category->name),
                 'datasets_count' => $category->contributes_count ?? 0,
-                'description' => $this->getCategoryDescription($category->name),
-                'icon' => $this->getCategoryIcon($category->name),
+                'description' => $category->description ?? $this->getCategoryDescription($category->name),
+                'icon' => $category->icon ?? $this->getCategoryIcon($category->name),
             ];
         });
 
@@ -42,13 +42,22 @@ class CategoryController extends Controller
     {
         $validated = $request->validate([
             'name' => 'required|string|max:255|unique:categories,name',
+            'icon' => 'required|string|max:50',
+            'description' => 'nullable|string|max:500',
         ]);
 
         $category = Category::create($validated);
 
         return response()->json([
             'message' => 'Category created successfully',
-            'category' => $category,
+            'category' => [
+                'id' => $category->id,
+                'name' => $category->name,
+                'slug' => Str::slug($category->name),
+                'icon' => $category->icon,
+                'description' => $category->description,
+                'datasets_count' => 0,
+            ],
         ], 201);
     }
 
@@ -73,7 +82,7 @@ class CategoryController extends Controller
 
     /**
      * Get category description based on name
-     * You can move this to database later if needed
+     * Fallback for old categories without description
      */
     private function getCategoryDescription(string $name): string
     {
@@ -107,7 +116,7 @@ class CategoryController extends Controller
 
     /**
      * Get icon name for category based on name
-     * Using lucide-react icon names
+     * Fallback for old categories without icon
      */
     private function getCategoryIcon(string $name): string
     {
