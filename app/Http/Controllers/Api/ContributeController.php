@@ -7,6 +7,8 @@ use Illuminate\Http\Request;
 use App\Models\Contribute;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
+use Illuminate\Support\Facades\Storage;
+use PhpOffice\PhpSpreadsheet\IOFactory;
 
 class ContributeController extends Controller
 {
@@ -17,7 +19,7 @@ class ContributeController extends Controller
     public function store(Request $request)
     {
         $validator = Validator::make($request->all(), [
-            'title' => 'required|string|max:255', // 🔑 ADD THIS
+            'title' => 'required|string|max:255',
             'organization' => 'required|string|max:255',
             'request_type' => 'required|string|max:255',
             'message' => 'required|string',
@@ -236,7 +238,6 @@ class ContributeController extends Controller
         return response()->json($result);
     }
 
-
     public function approved()
     {
         $contributes = Contribute::with('user', 'categories', 'tags')
@@ -261,7 +262,6 @@ class ContributeController extends Controller
         return response()->json($contribute);
     }
 
-
     public function myContributions()
     {
         $contributes = auth('api')->user()
@@ -271,5 +271,161 @@ class ContributeController extends Controller
             ->get();
 
         return response()->json($contributes);
+    }
+
+    public function getFileData($id)
+    {
+        try {
+            $contribute = Contribute::with(['user', 'categories', 'tags'])
+                ->where('status', 'approved')
+                ->findOrFail($id);
+
+            if (!$contribute->file_path) {
+                return response()->json([
+                    'error' => 'No file associated with this contribution'
+                ], 404);
+            }
+
+            // Get the full file path
+            $filePath = storage_path('app/public/' . $contribute->file_path);
+
+            if (!file_exists($filePath)) {
+                return response()->json([
+                    'error' => 'File not found'
+                ], 404);
+            }
+
+            // Detect file type and parse accordingly
+            $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
+            
+            if ($extension === 'csv') {
+                $data = $this->parseCsv($filePath);
+            } elseif (in_array($extension, ['xlsx', 'xls'])) {
+                $data = $this->parseExcel($filePath);
+            } else {
+                return response()->json([
+                    'error' => 'Unsupported file format. Only CSV, XLS, and XLSX are supported.'
+                ], 400);
+            }
+
+            return response()->json([
+                'success' => true,
+                'data' => $data,
+                'file_type' => $extension,
+                'headers' => $data['headers'] ?? [],
+                'rows' => $data['rows'] ?? []
+            ]);
+
+        } catch (\Exception $e) {
+            return response()->json([
+                'error' => 'Failed to parse file: ' . $e->getMessage()
+            ], 500);
+        }
+    }
+
+    /**
+     * Parse CSV file
+     */
+    private function parseCsv($filePath)
+    {
+        $rows = [];
+        $headers = [];
+
+        if (($handle = fopen($filePath, 'r')) !== false) {
+            // Get headers from first row
+            $headers = fgetcsv($handle);
+            
+            // Clean headers (trim whitespace)
+            $headers = array_map('trim', $headers);
+
+            // Get data rows (limit to 1000 rows for performance)
+            $rowCount = 0;
+            while (($row = fgetcsv($handle)) !== false && $rowCount < 1000) {
+                $rowData = [];
+                $hasData = false; // Track if row has any non-empty values
+                
+                foreach ($headers as $index => $header) {
+                    $value = isset($row[$index]) ? trim($row[$index]) : null;
+                    
+                    // Check if this cell has data
+                    if ($value !== null && $value !== '') {
+                        $hasData = true;
+                    }
+                    
+                    // Try to convert to number if possible
+                    if (is_numeric($value)) {
+                        $value = $value + 0; // Convert to int or float
+                    }
+                    $rowData[$header] = $value;
+                }
+                
+                // Only add row if it has at least one non-empty value
+                if ($hasData) {
+                    $rows[] = $rowData;
+                    $rowCount++;
+                }
+            }
+            fclose($handle);
+        }
+
+        return [
+            'headers' => $headers,
+            'rows' => $rows
+        ];
+    }
+
+    /**
+     * Parse Excel file (XLSX/XLS)
+     */
+    private function parseExcel($filePath)
+    {
+        $spreadsheet = IOFactory::load($filePath);
+        $worksheet = $spreadsheet->getActiveSheet();
+        $highestRow = min($worksheet->getHighestRow(), 1001); // Limit to 1000 rows + header
+        $highestColumn = $worksheet->getHighestColumn();
+        
+        $rows = [];
+        $headers = [];
+
+        // Get headers from first row
+        $headerRow = $worksheet->rangeToArray('A1:' . $highestColumn . '1', null, true, false)[0];
+        $headers = array_map('trim', $headerRow);
+
+        // Get data rows
+        for ($row = 2; $row <= $highestRow; $row++) {
+            $rowData = [];
+            $hasData = false; // Track if row has any non-empty values
+            $cells = $worksheet->rangeToArray('A' . $row . ':' . $highestColumn . $row, null, true, false)[0];
+            
+            foreach ($headers as $index => $header) {
+                $value = isset($cells[$index]) ? $cells[$index] : null;
+                
+                // Trim if string
+                if (is_string($value)) {
+                    $value = trim($value);
+                }
+                
+                // Check if this cell has data
+                if ($value !== null && $value !== '') {
+                    $hasData = true;
+                }
+                
+                // Convert numeric strings to numbers
+                if (is_numeric($value)) {
+                    $value = $value + 0;
+                }
+                $rowData[$header] = $value;
+            }
+            
+            // Only add row if it has at least one non-empty value
+            if ($hasData) {
+                $rows[] = $rowData;
+            }
+        }
+
+        return [
+            'headers' => $headers,
+            'rows' => $rows
+        ];
     }
 }
