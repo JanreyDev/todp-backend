@@ -10,7 +10,7 @@ class Contribute extends Model
     use HasFactory;
 
     protected $fillable = [
-        'user_id', // Add this
+        'user_id',
         'title',
         'organization',
         'request_type',
@@ -26,15 +26,19 @@ class Contribute extends Model
 
     public function categories()
     {
-        // Explicitly specify table name if needed
         return $this->belongsToMany(Category::class, 'category_contribute');
     }
 
     public function tags()
     {
-        // Explicitly specify table name if needed
         return $this->belongsToMany(Tag::class, 'contribute_tag');
-        // OR if your table is named 'tag_contribute':
-        // return $this->belongsToMany(Tag::class, 'tag_contribute');
+    }
+
+    /**
+     * Get all files associated with this contribution
+     */
+    public function files()
+    {
+        return $this->hasMany(ContributeFile::class);
     }
 }

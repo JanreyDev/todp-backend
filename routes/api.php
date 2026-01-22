@@ -12,11 +12,14 @@ Route::post('/login', [AuthController::class, 'login']);
 Route::get('/contributes/leaderboard', [ContributeController::class, 'publicLeaderboard']);
 Route::get('/contributes/approved', [ContributeController::class, 'approved']);
 Route::get('/contributes/approved/{id}', [ContributeController::class, 'showApproved']);
-Route::get('/contributes/approved/{id}/data', [ContributeController::class, 'getFileData']); // NEW LINE
+Route::get('/contributes/approved/{id}/data', [ContributeController::class, 'getFileData']);
+// Get data from a specific file
+Route::get('/contributes/approved/{id}/data/{fileId}', [ContributeController::class, 'getFileData']);
 
 // Public: Fetch categories and tags
 Route::get('/categories', [CategoryController::class, 'index']);
 Route::get('/tags', [TagController::class, 'index']);
+
 
 // Protected routes
 Route::middleware('auth:api')->group(function(){

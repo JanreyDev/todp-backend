@@ -5,6 +5,7 @@ namespace App\Http\Controllers\Api;
 use App\Http\Controllers\Controller;
 use Illuminate\Http\Request;
 use App\Models\Contribute;
+use App\Models\ContributeFile;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Facades\Validator;
 use Illuminate\Support\Facades\Storage;
@@ -13,7 +14,7 @@ use PhpOffice\PhpSpreadsheet\IOFactory;
 class ContributeController extends Controller
 {
     /**
-     * Store a new contribution (authenticated users only)
+     * Store a new contribution with multiple files (authenticated users only)
      * Status is automatically set to 'pending'
      */
     public function store(Request $request)
@@ -23,7 +24,8 @@ class ContributeController extends Controller
             'organization' => 'required|string|max:255',
             'request_type' => 'required|string|max:255',
             'message' => 'required|string',
-            'file' => 'nullable|file|mimes:xlsx,xls,csv|max:10240', // 10MB max
+            'files' => 'nullable|array|max:5', // Max 5 files
+            'files.*' => 'file|mimes:xlsx,xls,csv|max:10240', // Each file max 10MB
         ]);
 
         if ($validator->fails()) {
@@ -33,33 +35,66 @@ class ContributeController extends Controller
             ], 422);
         }
 
-        $data = $request->only(['title', 'organization', 'request_type', 'message']);
+        try {
+            DB::beginTransaction();
 
-        // Handle file upload if present
-        if ($request->hasFile('file')) {
-            $file = $request->file('file');
-            $fileName = time() . '_' . $file->getClientOriginalName();
-            $data['file_path'] = $file->storeAs('uploads', $fileName, 'public');
+            $data = $request->only(['title', 'organization', 'request_type', 'message']);
+            $data['status'] = 'pending';
+
+            // Create contribution
+            $contribute = auth('api')->user()->contributions()->create($data);
+
+            // Handle multiple file uploads
+            if ($request->hasFile('files')) {
+                $uploadedFiles = [];
+                
+                foreach ($request->file('files') as $file) {
+                    $fileName = time() . '_' . uniqid() . '_' . $file->getClientOriginalName();
+                    $filePath = $file->storeAs('uploads', $fileName, 'public');
+                    
+                    // Create file record
+                    $contributeFile = ContributeFile::create([
+                        'contribute_id' => $contribute->id,
+                        'file_path' => $filePath,
+                        'original_name' => $file->getClientOriginalName(),
+                        'file_type' => $file->getClientOriginalExtension(),
+                        'file_size' => $file->getSize(),
+                    ]);
+                    
+                    $uploadedFiles[] = $contributeFile;
+                }
+
+                // For backward compatibility, store first file path in main table
+                if (count($uploadedFiles) > 0) {
+                    $contribute->file_path = $uploadedFiles[0]->file_path;
+                    $contribute->save();
+                }
+            }
+
+            DB::commit();
+
+            // Load relationships for response
+            $contribute->load(['user', 'files']);
+
+            return response()->json([
+                'message' => 'Contribution submitted successfully and is pending review',
+                'contribute' => $contribute,
+                'files_count' => $contribute->files->count()
+            ], 201);
+
+        } catch (\Exception $e) {
+            DB::rollBack();
+            
+            return response()->json([
+                'message' => 'Failed to submit contribution',
+                'error' => $e->getMessage()
+            ], 500);
         }
-
-        // Set status to pending by default
-        $data['status'] = 'pending';
-
-        // Create contribution associated with authenticated user
-        $contribute = auth('api')->user()->contributions()->create($data);
-
-        // Load user relationship for response
-        $contribute->load('user');
-
-        return response()->json([
-            'message' => 'Contribution submitted successfully and is pending review',
-            'contribute' => $contribute
-        ], 201);
     }
 
     public function index()
     {
-        $contributes = Contribute::with(['user', 'categories', 'tags'])
+        $contributes = Contribute::with(['user', 'categories', 'tags', 'files'])
             ->latest()
             ->get()
             ->map(function ($contribute) {
@@ -90,6 +125,16 @@ class ContributeController extends Controller
                             'name' => $tag->name,
                         ];
                     }),
+                    'files' => $contribute->files->map(function ($file) {
+                        return [
+                            'id' => $file->id,
+                            'original_name' => $file->original_name,
+                            'file_type' => $file->file_type,
+                            'file_size' => $file->file_size,
+                            'formatted_size' => $file->formatted_size,
+                            'file_path' => $file->file_path,
+                        ];
+                    }),
                 ];
             });
 
@@ -98,7 +143,7 @@ class ContributeController extends Controller
 
     public function show($id)
     {
-        $contribute = Contribute::with('user', 'categories', 'tags')->findOrFail($id);
+        $contribute = Contribute::with(['user', 'categories', 'tags', 'files'])->findOrFail($id);
         return response()->json($contribute);
     }
 
@@ -107,7 +152,6 @@ class ContributeController extends Controller
         try {
             $contribute = Contribute::findOrFail($id);
 
-            // More flexible validation
             $validator = Validator::make($request->all(), [
                 'status' => 'nullable|in:pending,approved,rejected',
                 'categories' => 'nullable|array',
@@ -122,71 +166,50 @@ class ContributeController extends Controller
                 ], 422);
             }
 
-            // Update status if provided
             if ($request->has('status')) {
                 $contribute->status = $request->status;
                 $contribute->save();
             }
 
-            // Sync categories (handle both IDs and names)
             if ($request->has('categories')) {
                 $categoryIds = [];
-
                 foreach ($request->categories as $item) {
                     try {
                         if (is_numeric($item)) {
-                            // It's an ID
                             $categoryIds[] = (int)$item;
                         } else {
-                            // It's a name, find or create
-                            $category = \App\Models\Category::firstOrCreate(
-                                ['name' => trim($item)]
-                            );
+                            $category = \App\Models\Category::firstOrCreate(['name' => trim($item)]);
                             $categoryIds[] = $category->id;
                         }
                     } catch (\Exception $e) {
-                        \Log::error('Error processing category', [
-                            'item' => $item,
-                            'error' => $e->getMessage()
-                        ]);
+                        \Log::error('Error processing category', ['item' => $item, 'error' => $e->getMessage()]);
                     }
                 }
-
                 if (!empty($categoryIds)) {
                     $contribute->categories()->sync($categoryIds);
                 }
             }
 
-            // Sync tags (handle both IDs and names)
             if ($request->has('tags')) {
                 $tagIds = [];
-
                 foreach ($request->tags as $item) {
                     try {
                         if (is_numeric($item)) {
-                            // It's an ID
                             $tagIds[] = (int)$item;
                         } else {
-                            // It's a name, find or create
-                            $tag = \App\Models\Tag::firstOrCreate(
-                                ['name' => trim($item)]
-                            );
+                            $tag = \App\Models\Tag::firstOrCreate(['name' => trim($item)]);
                             $tagIds[] = $tag->id;
                         }
                     } catch (\Exception $e) {
-                        \Log::error('Error processing tag', [
-                            'item' => $item,
-                            'error' => $e->getMessage()
-                        ]);
+                        \Log::error('Error processing tag', ['item' => $item, 'error' => $e->getMessage()]);
                     }
                 }
-
                 if (!empty($tagIds)) {
                     $contribute->tags()->sync($tagIds);
                 }
             }
 
-            $contribute->load('user', 'categories', 'tags');
+            $contribute->load(['user', 'categories', 'tags', 'files']);
 
             return response()->json([
                 'message' => 'Contribution updated successfully',
@@ -208,17 +231,15 @@ class ContributeController extends Controller
 
     public function publicLeaderboard()
     {
-        // Get top contributors with count and last contribution
         $leaders = Contribute::select('user_id')
             ->selectRaw('COUNT(*) as total_contributions')
             ->selectRaw('MAX(created_at) as last_contribution_date')
-            ->where('status', 'approved') // Only count approved contributions
+            ->where('status', 'approved')
             ->groupBy('user_id')
             ->orderByDesc('total_contributions')
-            ->limit(10) // Top 10 contributors
+            ->limit(10)
             ->get();
 
-        // Attach user info and last contribution title
         $result = $leaders->map(function ($item) {
             $user = \App\Models\User::find($item->user_id);
             $lastContrib = Contribute::where('user_id', $item->user_id)
@@ -240,7 +261,7 @@ class ContributeController extends Controller
 
     public function approved()
     {
-        $contributes = Contribute::with('user', 'categories', 'tags')
+        $contributes = Contribute::with(['user', 'categories', 'tags', 'files'])
             ->where('status', 'approved')
             ->latest()
             ->paginate(15);
@@ -248,13 +269,9 @@ class ContributeController extends Controller
         return response()->json($contributes);
     }
 
-    /**
-     * Get single approved contribution (public)
-     * Returns a specific approved contribution for public viewing
-     */
     public function showApproved($id)
     {
-        $contribute = Contribute::with('user', 'categories', 'tags')
+        $contribute = Contribute::with(['user', 'categories', 'tags', 'files'])
             ->where('id', $id)
             ->where('status', 'approved')
             ->firstOrFail();
@@ -266,52 +283,58 @@ class ContributeController extends Controller
     {
         $contributes = auth('api')->user()
             ->contributions()
-            ->with('categories', 'tags')
+            ->with(['categories', 'tags', 'files'])
             ->latest()
             ->get();
 
         return response()->json($contributes);
     }
 
-    public function getFileData($id)
+    /**
+     * Get file data for a specific file in a contribution
+     */
+    public function getFileData($id, $fileId = null)
     {
         try {
-            $contribute = Contribute::with(['user', 'categories', 'tags'])
+            $contribute = Contribute::with(['user', 'categories', 'tags', 'files'])
                 ->where('status', 'approved')
                 ->findOrFail($id);
 
-            if (!$contribute->file_path) {
-                return response()->json([
-                    'error' => 'No file associated with this contribution'
-                ], 404);
+            // If fileId is provided, get specific file; otherwise get first file
+            if ($fileId) {
+                $file = ContributeFile::where('contribute_id', $id)
+                    ->where('id', $fileId)
+                    ->firstOrFail();
+            } else {
+                $file = $contribute->files()->first();
+                
+                if (!$file) {
+                    // Fallback to old file_path if no files exist
+                    if (!$contribute->file_path) {
+                        return response()->json(['error' => 'No file associated with this contribution'], 404);
+                    }
+                    return $this->parseFileFromPath($contribute->file_path);
+                }
             }
 
-            // Get the full file path
-            $filePath = storage_path('app/public/' . $contribute->file_path);
+            $filePath = storage_path('app/public/' . $file->file_path);
 
             if (!file_exists($filePath)) {
-                return response()->json([
-                    'error' => 'File not found'
-                ], 404);
+                return response()->json(['error' => 'File not found'], 404);
             }
 
-            // Detect file type and parse accordingly
-            $extension = strtolower(pathinfo($filePath, PATHINFO_EXTENSION));
-            
-            if ($extension === 'csv') {
-                $data = $this->parseCsv($filePath);
-            } elseif (in_array($extension, ['xlsx', 'xls'])) {
-                $data = $this->parseExcel($filePath);
-            } else {
-                return response()->json([
-                    'error' => 'Unsupported file format. Only CSV, XLS, and XLSX are supported.'
-                ], 400);
-            }
+            $data = $this->parseFile($filePath, $file->file_type);
 
             return response()->json([
                 'success' => true,
                 'data' => $data,
-                'file_type' => $extension,
+                'file_info' => [
+                    'id' => $file->id,
+                    'name' => $file->original_name,
+                    'type' => $file->file_type,
+                    'size' => $file->formatted_size,
+                ],
+                'file_type' => $file->file_type,
                 'headers' => $data['headers'] ?? [],
                 'rows' => $data['rows'] ?? []
             ]);
@@ -324,42 +347,46 @@ class ContributeController extends Controller
     }
 
     /**
-     * Parse CSV file
+     * Parse file based on extension
      */
+    private function parseFile($filePath, $extension)
+    {
+        if ($extension === 'csv') {
+            return $this->parseCsv($filePath);
+        } elseif (in_array($extension, ['xlsx', 'xls'])) {
+            return $this->parseExcel($filePath);
+        }
+        
+        throw new \Exception('Unsupported file format');
+    }
+
     private function parseCsv($filePath)
     {
         $rows = [];
         $headers = [];
 
         if (($handle = fopen($filePath, 'r')) !== false) {
-            // Get headers from first row
             $headers = fgetcsv($handle);
-            
-            // Clean headers (trim whitespace)
             $headers = array_map('trim', $headers);
 
-            // Get data rows (limit to 1000 rows for performance)
             $rowCount = 0;
             while (($row = fgetcsv($handle)) !== false && $rowCount < 1000) {
                 $rowData = [];
-                $hasData = false; // Track if row has any non-empty values
+                $hasData = false;
                 
                 foreach ($headers as $index => $header) {
                     $value = isset($row[$index]) ? trim($row[$index]) : null;
                     
-                    // Check if this cell has data
                     if ($value !== null && $value !== '') {
                         $hasData = true;
                     }
                     
-                    // Try to convert to number if possible
                     if (is_numeric($value)) {
-                        $value = $value + 0; // Convert to int or float
+                        $value = $value + 0;
                     }
                     $rowData[$header] = $value;
                 }
                 
-                // Only add row if it has at least one non-empty value
                 if ($hasData) {
                     $rows[] = $rowData;
                     $rowCount++;
@@ -374,50 +401,41 @@ class ContributeController extends Controller
         ];
     }
 
-    /**
-     * Parse Excel file (XLSX/XLS)
-     */
     private function parseExcel($filePath)
     {
         $spreadsheet = IOFactory::load($filePath);
         $worksheet = $spreadsheet->getActiveSheet();
-        $highestRow = min($worksheet->getHighestRow(), 1001); // Limit to 1000 rows + header
+        $highestRow = min($worksheet->getHighestRow(), 1001);
         $highestColumn = $worksheet->getHighestColumn();
         
         $rows = [];
         $headers = [];
 
-        // Get headers from first row
         $headerRow = $worksheet->rangeToArray('A1:' . $highestColumn . '1', null, true, false)[0];
         $headers = array_map('trim', $headerRow);
 
-        // Get data rows
         for ($row = 2; $row <= $highestRow; $row++) {
             $rowData = [];
-            $hasData = false; // Track if row has any non-empty values
+            $hasData = false;
             $cells = $worksheet->rangeToArray('A' . $row . ':' . $highestColumn . $row, null, true, false)[0];
             
             foreach ($headers as $index => $header) {
                 $value = isset($cells[$index]) ? $cells[$index] : null;
                 
-                // Trim if string
                 if (is_string($value)) {
                     $value = trim($value);
                 }
                 
-                // Check if this cell has data
                 if ($value !== null && $value !== '') {
                     $hasData = true;
                 }
                 
-                // Convert numeric strings to numbers
                 if (is_numeric($value)) {
                     $value = $value + 0;
                 }
                 $rowData[$header] = $value;
             }
             
-            // Only add row if it has at least one non-empty value
             if ($hasData) {
                 $rows[] = $rowData;
             }
