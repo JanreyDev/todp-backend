@@ -47,11 +47,11 @@ class ContributeController extends Controller
             // Handle multiple file uploads
             if ($request->hasFile('files')) {
                 $uploadedFiles = [];
-                
+
                 foreach ($request->file('files') as $file) {
                     $fileName = time() . '_' . uniqid() . '_' . $file->getClientOriginalName();
                     $filePath = $file->storeAs('uploads', $fileName, 'public');
-                    
+
                     // Create file record
                     $contributeFile = ContributeFile::create([
                         'contribute_id' => $contribute->id,
@@ -60,7 +60,7 @@ class ContributeController extends Controller
                         'file_type' => $file->getClientOriginalExtension(),
                         'file_size' => $file->getSize(),
                     ]);
-                    
+
                     $uploadedFiles[] = $contributeFile;
                 }
 
@@ -84,7 +84,7 @@ class ContributeController extends Controller
 
         } catch (\Exception $e) {
             DB::rollBack();
-            
+
             return response()->json([
                 'message' => 'Failed to submit contribution',
                 'error' => $e->getMessage()
@@ -247,10 +247,21 @@ class ContributeController extends Controller
                 ->latest()
                 ->first();
 
+            // Get breakdown of request types for this user
+            $requestTypes = Contribute::where('user_id', $item->user_id)
+                ->where('status', 'approved')
+                ->select('request_type', DB::raw('count(*) as count'))
+                ->groupBy('request_type')
+                ->pluck('count', 'request_type');
+
             return [
-                'name' => $user->name ?? 'Unknown',
-                'organization' => $lastContrib->organization ?? '-',
-                'total_contributions' => $item->total_contributions,
+                'user' => [
+                    'name' => $user->name ?? 'Unknown',
+                    'email' => $user->email ?? '',
+                ],
+                'organization' => $lastContrib->organization ?? 'Independent',
+                'total' => (int) $item->total_contributions,
+                'request_types' => $requestTypes,
                 'last_title' => $lastContrib->title ?? null,
                 'last_date' => $lastContrib->created_at ?? null,
             ];
@@ -307,7 +318,7 @@ class ContributeController extends Controller
                     ->firstOrFail();
             } else {
                 $file = $contribute->files()->first();
-                
+
                 if (!$file) {
                     // Fallback to old file_path if no files exist
                     if (!$contribute->file_path) {
@@ -356,7 +367,7 @@ class ContributeController extends Controller
         } elseif (in_array($extension, ['xlsx', 'xls'])) {
             return $this->parseExcel($filePath);
         }
-        
+
         throw new \Exception('Unsupported file format');
     }
 
@@ -373,20 +384,20 @@ class ContributeController extends Controller
             while (($row = fgetcsv($handle)) !== false && $rowCount < 1000) {
                 $rowData = [];
                 $hasData = false;
-                
+
                 foreach ($headers as $index => $header) {
                     $value = isset($row[$index]) ? trim($row[$index]) : null;
-                    
+
                     if ($value !== null && $value !== '') {
                         $hasData = true;
                     }
-                    
+
                     if (is_numeric($value)) {
                         $value = $value + 0;
                     }
                     $rowData[$header] = $value;
                 }
-                
+
                 if ($hasData) {
                     $rows[] = $rowData;
                     $rowCount++;
@@ -407,7 +418,7 @@ class ContributeController extends Controller
         $worksheet = $spreadsheet->getActiveSheet();
         $highestRow = min($worksheet->getHighestRow(), 1001);
         $highestColumn = $worksheet->getHighestColumn();
-        
+
         $rows = [];
         $headers = [];
 
@@ -418,24 +429,24 @@ class ContributeController extends Controller
             $rowData = [];
             $hasData = false;
             $cells = $worksheet->rangeToArray('A' . $row . ':' . $highestColumn . $row, null, true, false)[0];
-            
+
             foreach ($headers as $index => $header) {
                 $value = isset($cells[$index]) ? $cells[$index] : null;
-                
+
                 if (is_string($value)) {
                     $value = trim($value);
                 }
-                
+
                 if ($value !== null && $value !== '') {
                     $hasData = true;
                 }
-                
+
                 if (is_numeric($value)) {
                     $value = $value + 0;
                 }
                 $rowData[$header] = $value;
             }
-            
+
             if ($hasData) {
                 $rows[] = $rowData;
             }
